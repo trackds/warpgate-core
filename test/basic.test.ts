@@ -33,13 +33,11 @@ describe("TCP Forward", () => {
     const TCP_TEST_PORT = 31188;
     const node = new WarpgateNode();
     node.addForward({
-      address: "127.0.0.1",
+      host: "127.0.0.1",
       port: TCP_TEST_PORT,
-      family: "ipv4"
     }, {
-      address: "127.0.0.1",
+      host: "127.0.0.1",
       port: TCP_SERVER_PORT,
-      family: "ipv4"
     });
 
     const socket = createConnection({
@@ -51,11 +49,18 @@ describe("TCP Forward", () => {
       socket.end()
       log("client rec data %s", data.toString());
       expect(data.toString()).equal("ok");
-      done();
-    });
-
-    socket.on("error", (err) => {
-      done(err);
+      const socket2 = createConnection({
+        host: "127.0.0.1",
+        port: TCP_TEST_PORT
+      });
+      socket2.on("data", (data) => {
+        log("client2 rec data %s", data.toString());
+        expect(data.toString()).equal("ok");
+        socket2.end();
+        done();
+      });
+      socket.end();
+      socket2.write("hello");
     });
 
     socket.write("hello");

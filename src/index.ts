@@ -3,12 +3,19 @@ import { nanoid } from "nanoid";
 import { SmartBuffer } from "smart-buffer";
 import { Duplex, DuplexOptions } from "stream";
 import { createConnection, createServer } from "net";
-import type {Socket} from "net";
+import type { Socket } from "net";
 import fetch from "node-fetch";
 import wrtc from "wrtc";
 import WebSocket from "ws";
 import debug from "debug";
-import { WarpgateAddr, HostAddr, isWarpgateAddr, isHostAddr, ForwardId, ForwardRuleId } from "./defined";
+import {
+  WarpgateAddr,
+  HostAddr,
+  isWarpgateAddr,
+  isHostAddr,
+  ForwardId,
+  ForwardRuleId,
+} from "./defined";
 
 interface ForwardRule {
   id: ForwardRuleId;
@@ -21,7 +28,7 @@ const enum MessageType {
   CreateStream = 0x31,
   CloseStream = 0x32,
   Respone = 0x40,
-  Data = 0xFE
+  Data = 0xfe,
 }
 
 interface WarpgateStream extends Duplex {
@@ -37,7 +44,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
   readonly ruleId: string;
   readonly forwardId: string;
   private readonly rule: WarpgateTcpStreamRule;
-  private readonly socket: Socket;
+  private socket: Socket = null;
   private bufs: Buffer[] = [];
   private log = debug("Warpgate:WarpgateTcpStream");
   constructor(rule: WarpgateTcpStreamRule, opt?: DuplexOptions) {
@@ -45,26 +52,51 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
     this.ruleId = rule.id;
     this.rule = rule;
     this.forwardId = nanoid();
-    this.socket = createConnection({
-      host: rule.target.address,
-      port: rule.target.port
-    });
-
-    this.socket.on("close", () => {
-      this.push(null);
-    });
-
-    this.socket.on("error", () => {
-      this.push(null);
-    });
   }
 
   _read() {
-    this.socket.on("data", (data) => {
-      this.push(data);
-    });
+    if (!this.socket) {
+      this.socket = createConnection({
+        host: this.rule.target.host,
+        port: this.rule.target.port,
+      });
+
+      this.socket.on("close", () => {
+        this.log(
+          "id:%s rule:%s %s:%d close",
+          this.forwardId,
+          this.ruleId,
+          this.rule.target.host,
+          this.rule.target.port
+        );
+        this.socket = null;
+        this.push(null);
+      });
+
+      this.socket.on("error", (err) => {
+        this.log(
+          "id:%s %s:%d error:%O",
+          this.forwardId,
+          this.ruleId,
+          this.rule.target.host,
+          this.rule.target.port,
+          err
+        );
+        this.socket = null;
+        this.push(null);
+      });
+
+      this.socket.on("data", (data) => {
+        this.log("rec data %o", data);
+        this.push(data);
+      });
+    }
   }
-  _write(chunk: Buffer | string, _encoding: BufferEncoding, done: (error?: Error | null) => void) {
+  _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    done: (error?: Error | null) => void
+  ) {
     this.socket.write(chunk, done);
   }
   _final(cb: (error?: Error | null) => void) {
@@ -76,9 +108,9 @@ export class WarpgateNode {
   private node: SimplePeerjs;
   private streams: WarpgateStream[] = [];
   private rules: ForwardRule[] = [];
-
+  private log = debug("Warpgate:WarpgateNode");
   constructor(opts?: SimplePeerJsOpts) {
-    this.node = new SimplePeerjs({...{fetch, wrtc, WebSocket}, ...opts});
+    this.node = new SimplePeerjs({ ...{ fetch, wrtc, WebSocket }, ...opts });
 
     this.node.on("connect", (conn) => {
       conn.peer.on("data", (data) => {
@@ -91,8 +123,7 @@ export class WarpgateNode {
             const rule = this.rules.find((rule) => {
               return rule.listener === serviceName;
             });
-            if (rule) 
-              this.createStream(rule);
+            if (rule) this.createStream(rule);
             break;
           }
           default:
@@ -100,22 +131,16 @@ export class WarpgateNode {
         }
       });
     });
-
   }
 
   private createStream(rule: ForwardRule): WarpgateStream {
-    let stream: WarpgateStream = this.streams.find((s) => s.ruleId === rule.id);
-
-    if (stream) {
-      //流已存在
-      return stream;
-    }
+    let stream: WarpgateStream = null;
 
     if (isHostAddr(rule.target)) {
       const proto = rule.target.proto || "TCP";
       switch (proto) {
         case "TCP":
-          stream = new WarpgateTcpStream({id: rule.id, target: rule.target});
+          stream = new WarpgateTcpStream({ id: rule.id, target: rule.target });
           break;
         case "UDP":
         default:
@@ -134,35 +159,41 @@ export class WarpgateNode {
   addForward(listenAddr: HostAddr, targetAddr: WarpgateAddr): ForwardRuleId;
   addForward(listenAddr: HostAddr, targetHost: HostAddr): ForwardRuleId;
 
-  addForward(param1: string | HostAddr, param2: WarpgateAddr | HostAddr): ForwardRuleId {
+  addForward(
+    param1: string | HostAddr,
+    param2: WarpgateAddr | HostAddr
+  ): ForwardRuleId {
     const id = nanoid(8);
     const rule: ForwardRule = {
       id,
       listener: param1,
-      target: param2
+      target: param2,
     };
 
     this.rules.push(rule);
-    
+
     if (isHostAddr(param1)) {
       const listenAddr = param1;
       const proto = listenAddr.proto || "TCP";
 
-      this.createStream(rule);
-      switch(proto) {
+      switch (proto) {
         case "TCP": {
           const server = createServer((socket) => {
-            const stream = this.streams.find((s) => s.ruleId === id);
+            const stream = this.createStream(rule);
             if (stream) {
-              socket.on("error", (err) => {
-                console.error("client:", err);
-              }).pipe(stream).on("error", (err) => {
-                console.error("target:", err);
-              }).pipe(socket);
+              socket
+                .on("error", (err) => {
+                  this.log("client:%O", err);
+                })
+                .pipe(stream)
+                .on("error", (err) => {
+                  this.log("target:%O", err);
+                })
+                .pipe(socket);
             }
           });
 
-          server.listen(listenAddr.port, listenAddr.address);
+          server.listen(listenAddr.port, listenAddr.host);
           break;
         }
         case "UDP":
@@ -170,7 +201,7 @@ export class WarpgateNode {
           break;
       }
     }
-  
+
     return id;
   }
 }
