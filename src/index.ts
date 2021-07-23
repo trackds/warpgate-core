@@ -2,8 +2,12 @@ import SimplePeerjs, { SimplePeerJsOpts } from "simple-peerjs";
 import { nanoid } from "nanoid";
 import { SmartBuffer } from "smart-buffer";
 import { Duplex, DuplexOptions } from "stream";
-import { createConnection } from "net";
+import { createConnection, createServer } from "net";
 import type {Socket} from "net";
+import fetch from "node-fetch";
+import wrtc from "wrtc";
+import WebSocket from "ws";
+import debug from "debug";
 import { WarpgateAddr, HostAddr, isWarpgateAddr, isHostAddr, ForwardId, ForwardRuleId } from "./defined";
 
 interface ForwardRule {
@@ -25,31 +29,40 @@ interface WarpgateStream extends Duplex {
   forwardId: ForwardId;
 }
 
+interface WarpgateTcpStreamRule {
+  id: ForwardRuleId;
+  target: HostAddr;
+}
 class WarpgateTcpStream extends Duplex implements WarpgateStream {
   readonly ruleId: string;
   readonly forwardId: string;
-  private readonly rule: ForwardRule;
+  private readonly rule: WarpgateTcpStreamRule;
   private readonly socket: Socket;
   private bufs: Buffer[] = [];
-  constructor(rule: ForwardRule, opt?: DuplexOptions) {
+  private log = debug("Warpgate:WarpgateTcpStream");
+  constructor(rule: WarpgateTcpStreamRule, opt?: DuplexOptions) {
     super(opt);
     this.ruleId = rule.id;
     this.rule = rule;
     this.forwardId = nanoid();
-    if (isHostAddr(rule.target)) {
-      this.socket = createConnection({
-        host: rule.target.address,
-        port: rule.target.port
-      });
+    this.socket = createConnection({
+      host: rule.target.address,
+      port: rule.target.port
+    });
 
-      this.socket.on("data", (data) => {
-        this.bufs.push(data);
-      });
-    }
+    this.socket.on("close", () => {
+      this.push(null);
+    });
+
+    this.socket.on("error", () => {
+      this.push(null);
+    });
   }
 
   _read() {
-    this.push(this.bufs.pop());
+    this.socket.on("data", (data) => {
+      this.push(data);
+    });
   }
   _write(chunk: Buffer | string, _encoding: BufferEncoding, done: (error?: Error | null) => void) {
     this.socket.write(chunk, done);
@@ -65,7 +78,7 @@ export class WarpgateNode {
   private rules: ForwardRule[] = [];
 
   constructor(opts?: SimplePeerJsOpts) {
-    this.node = new SimplePeerjs(opts);
+    this.node = new SimplePeerjs({...{fetch, wrtc, WebSocket}, ...opts});
 
     this.node.on("connect", (conn) => {
       conn.peer.on("data", (data) => {
@@ -102,7 +115,7 @@ export class WarpgateNode {
       const proto = rule.target.proto || "TCP";
       switch (proto) {
         case "TCP":
-          stream = new WarpgateTcpStream(rule);
+          stream = new WarpgateTcpStream({id: rule.id, target: rule.target});
           break;
         case "UDP":
         default:
@@ -123,11 +136,41 @@ export class WarpgateNode {
 
   addForward(param1: string | HostAddr, param2: WarpgateAddr | HostAddr): ForwardRuleId {
     const id = nanoid(8);
-    this.rules.push({
+    const rule: ForwardRule = {
       id,
       listener: param1,
       target: param2
-    });
+    };
+
+    this.rules.push(rule);
+    
+    if (isHostAddr(param1)) {
+      const listenAddr = param1;
+      const proto = listenAddr.proto || "TCP";
+
+      this.createStream(rule);
+      switch(proto) {
+        case "TCP": {
+          const server = createServer((socket) => {
+            const stream = this.streams.find((s) => s.ruleId === id);
+            if (stream) {
+              socket.on("error", (err) => {
+                console.error("client:", err);
+              }).pipe(stream).on("error", (err) => {
+                console.error("target:", err);
+              }).pipe(socket);
+            }
+          });
+
+          server.listen(listenAddr.port, listenAddr.address);
+          break;
+        }
+        case "UDP":
+        default:
+          break;
+      }
+    }
+  
     return id;
   }
 }
