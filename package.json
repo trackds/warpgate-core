@@ -27,7 +27,8 @@
   },
   "scripts": {
     "test": "mocha --extension test.ts --require ts-node/register",
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "mocha": "mocha"
   },
   "keywords": [],
   "author": "",

@@ -16,9 +16,10 @@ export type ForwardId = string;
 export type ForwardRuleId = string;
 
 export function isWarpgateAddr(p: unknown): p is WarpgateAddr {
+  const v = p as WarpgateAddr;
   return (
-    typeof (p as WarpgateAddr).peerId === "string" &&
-    typeof (p as WarpgateAddr).serviceName === "string"
+    typeof v.peerId === "string" &&
+    typeof v.serviceName === "string"
   );
 }
 

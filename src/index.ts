@@ -28,6 +28,7 @@ const enum MessageType {
   CreateStream = 0x31,
   CloseStream = 0x32,
   Respone = 0x40,
+  Error = 0x41,
   Data = 0xfe,
 }
 
@@ -70,7 +71,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
           this.rule.target.port
         );
         this.socket = null;
-        this.push(null);
+        this.end(null);
       });
 
       this.socket.on("error", (err) => {
@@ -83,7 +84,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
           err
         );
         this.socket = null;
-        this.push(null);
+        this.end(null);
       });
 
       this.socket.on("data", (data) => {
@@ -113,9 +114,12 @@ export class WarpgateNode {
     this.node = new SimplePeerjs({ ...{ fetch, wrtc, WebSocket }, ...opts });
 
     this.node.on("connect", (conn) => {
+      const nodeStreamId: {[id: string]: string[]} = {};
       conn.peer.on("data", (data) => {
         const buf = SmartBuffer.fromBuffer(data);
         const type: MessageType = buf.readUInt8();
+        const requestId = buf.readStringNT();
+        let res: SmartBuffer;
 
         switch (type) {
           case MessageType.CreateStream: {
@@ -123,12 +127,48 @@ export class WarpgateNode {
             const rule = this.rules.find((rule) => {
               return rule.listener === serviceName;
             });
-            if (rule) this.createStream(rule);
+            res = SmartBuffer.fromSize(64);
+            if (rule) {
+              const stream = this.createStream(rule);
+              if (nodeStreamId[conn.peerId]) {
+                nodeStreamId[conn.peerId].push(stream.forwardId);
+              } else {
+                nodeStreamId[conn.peerId] = [stream.forwardId];
+              }
+              res.writeUInt8(MessageType.Respone);
+              res.writeUInt8(MessageType.CreateStream);
+              res.writeStringNT(requestId);
+              res.writeStringNT(stream.forwardId);
+            } else {
+              res.writeUInt8(MessageType.Error);
+              res.writeUInt8(MessageType.CreateStream);
+              res.writeStringNT(requestId);
+              res.writeStringNT("rules don't exist");
+            }
             break;
           }
           default:
+            res = SmartBuffer.fromSize(64);
+            res.writeUInt8(MessageType.Error);
+            res.writeUInt8(type);
+            res.writeStringNT(requestId);
+            res.writeStringNT("unknown type");
             break;
         }
+
+        if (res)
+          conn.peer.write(res);
+      });
+
+      conn.peer.on("close", () => {
+        const thisNodeStreamId = nodeStreamId[conn.peerId]
+        thisNodeStreamId.forEach((id) => {
+          const stream = this.streams.find((s) => s.forwardId === id);
+
+          if (stream) {
+            stream.end();
+          }
+        });
       });
     });
   }
@@ -141,6 +181,11 @@ export class WarpgateNode {
       switch (proto) {
         case "TCP":
           stream = new WarpgateTcpStream({ id: rule.id, target: rule.target });
+          stream.on("close", () => {
+            this.streams = this.streams.filter((s) => {
+              return !(s === stream)
+            });
+          });
           break;
         case "UDP":
         default:
@@ -163,7 +208,14 @@ export class WarpgateNode {
     param1: string | HostAddr,
     param2: WarpgateAddr | HostAddr
   ): ForwardRuleId {
-    const id = nanoid(8);
+    const id = (() => {
+      let _id = nanoid(8);
+      while (this.rules.some((r) => r.id === _id)) {
+        _id = nanoid(8);
+      }
+      return _id;
+    })();
+
     const rule: ForwardRule = {
       id,
       listener: param1,
@@ -190,6 +242,8 @@ export class WarpgateNode {
                   this.log("target:%O", err);
                 })
                 .pipe(socket);
+
+                socket.once("close", () => stream.end());
             }
           });
 
