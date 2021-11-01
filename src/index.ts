@@ -6,12 +6,12 @@ import { createConnection, createServer } from "net";
 import type { Socket } from "net";
 import fetch from "node-fetch";
 import wrtc from "wrtc";
-import WebSocket from "ws";
+import WS from "ws";
 import debug from "debug";
 import {
   WarpgateAddr,
   HostAddr,
-  isWarpgateAddr,
+  // isWarpgateAddr,
   isHostAddr,
   ForwardId,
   ForwardRuleId,
@@ -111,7 +111,7 @@ export class WarpgateNode {
   private rules: ForwardRule[] = [];
   private log = debug("Warpgate:WarpgateNode");
   constructor(opts?: SimplePeerJsOpts) {
-    this.node = new SimplePeerjs({ ...{ fetch, wrtc, WebSocket }, ...opts });
+    this.node = new SimplePeerjs({ ...{ fetch, wrtc, WS }, ...opts });
 
     this.node.on("connect", (conn) => {
       const nodeStreamId: {[id: string]: string[]} = {};
