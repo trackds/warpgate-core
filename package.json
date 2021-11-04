@@ -6,7 +6,7 @@
   "dependencies": {
     "debug": "^4.3.2",
     "nanoid": "^3.1.30",
-    "node-fetch": "^3.0.0",
+    "node-fetch": "^2.6.6",
     "simple-peerjs": "^1.0.1",
     "smart-buffer": "^4.2.0",
     "wrtc": "^0.4.7",
@@ -16,6 +16,7 @@
     "@types/chai": "^4.2.22",
     "@types/debug": "^4.1.7",
     "@types/mocha": "^9.0.0",
+    "@types/node-fetch": "^2.5.12",
     "@types/simple-peer": "^9.11.3",
     "@types/ws": "^8.2.0",
     "@typescript-eslint/eslint-plugin": "^5.2.0",
@@ -30,7 +31,8 @@
   "scripts": {
     "test": "mocha --extension test.ts --require ts-node/register",
     "build": "tsc --build",
-    "mocha": "mocha"
+    "mocha": "mocha",
+    "ts-node": "ts-node"
   },
   "keywords": [],
   "author": "",

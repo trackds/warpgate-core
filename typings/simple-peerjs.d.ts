@@ -1,6 +1,6 @@
-
 declare module 'simple-peerjs' {
   import {Instance as SimplePeer, Options as SimplePeerOpts} from"@types/simple-peer";
+  // import WebSocket from "ws";
 
   export interface SimplePeerJsOpts {
     /**
@@ -29,7 +29,7 @@ declare module 'simple-peerjs' {
     /**
      * [WebSocket-like](https://www.w3.org/TR/websockets/) implementation
     */
-    WebSocket?: WebSocket;
+    WebSocket?: unknown;
   }
 
   export interface SimplePeerConn {
