@@ -10,6 +10,7 @@ const log = debug("test");
 
 describe("TCP Forward", () => {
   let server: Server;
+  let node: WarpgateNode;
   before((done) => {
     server = createServer((skt) => {
       skt.on("data", (data) => {
@@ -26,12 +27,14 @@ describe("TCP Forward", () => {
   after((done) => {
     server.close((err) => {
       done(err);
-    })
+    });
+    node.distroy();
   });
 
   it("TCP Forward", (done) => {
     const TCP_TEST_PORT = 31188;
-    const node = new WarpgateNode();
+    node = new WarpgateNode();
+
     node.addForward({
       host: "127.0.0.1",
       port: TCP_TEST_PORT,
@@ -59,7 +62,6 @@ describe("TCP Forward", () => {
         socket2.end();
         done();
       });
-      socket.end();
       socket2.write("hello");
     });
 

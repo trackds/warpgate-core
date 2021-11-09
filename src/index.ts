@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { SmartBuffer } from "smart-buffer";
 import { Duplex, DuplexOptions } from "stream";
 import { createConnection, createServer } from "net";
-import type { Socket } from "net";
+import type { Socket, Server as TCPServer } from "net";
 import fetch from "node-fetch";
 import wrtc from "wrtc";
 import WebSocket from "ws";
@@ -53,6 +53,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
     this.ruleId = rule.id;
     this.rule = rule;
     this.forwardId = nanoid();
+    this.log("new tcp stream id:%d rule:%o forwardId:%o", this.ruleId, rule, this.forwardId);
   }
 
   _read() {
@@ -101,6 +102,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
     this.socket.write(chunk, done);
   }
   _final(cb: (error?: Error | null) => void) {
+    this.log(`tcp stream final end socket %o`, this.socket.address());
     this.socket.end(cb);
   }
 }
@@ -108,6 +110,7 @@ class WarpgateTcpStream extends Duplex implements WarpgateStream {
 export class WarpgateNode {
   private node: SimplePeerjs;
   private streams: WarpgateStream[] = [];
+  private tcpListeners: { [id: string]: TCPServer } = {};
   private rules: ForwardRule[] = [];
   private log = debug("Warpgate:WarpgateNode");
   constructor(opts?: SimplePeerJsOpts) {
@@ -161,7 +164,7 @@ export class WarpgateNode {
       });
 
       conn.peer.on("close", () => {
-        const thisNodeStreamId = nodeStreamId[conn.peerId]
+        const thisNodeStreamId = nodeStreamId[conn.peerId];
         thisNodeStreamId.forEach((id) => {
           const stream = this.streams.find((s) => s.forwardId === id);
 
@@ -182,6 +185,7 @@ export class WarpgateNode {
         case "TCP":
           stream = new WarpgateTcpStream({ id: rule.id, target: rule.target });
           stream.on("close", () => {
+            this.log(`stream close ${stream.ruleId}`);
             this.streams = this.streams.filter((s) => {
               return !(s === stream)
             });
@@ -243,11 +247,15 @@ export class WarpgateNode {
                 })
                 .pipe(socket);
 
-                socket.once("close", () => stream.end());
+                socket.on("close", () => {
+                  this.log('socket:%o close ', socket.address());
+                  stream.end();
+                });
             }
           });
 
           server.listen(listenAddr.port, listenAddr.host);
+          this.tcpListeners[id] = server;
           break;
         }
         case "UDP":
@@ -257,5 +265,28 @@ export class WarpgateNode {
     }
 
     return id;
+  }
+
+  rmForward(forwardId: ForwardRuleId) {
+    this.log(`rmForward ${forwardId}`);
+    this.tcpListeners[forwardId]?.close((err) => {
+      if (err) {
+        this.log("error:%o", err);
+      } else {
+        delete this.tcpListeners[forwardId];
+      }
+    });
+    this.streams.forEach((stream) => {
+      if (stream.ruleId === forwardId) {
+        stream.end();
+      }
+    });
+  }
+
+  distroy() {
+    this.rules.forEach((rule) => {
+      this.rmForward(rule.id);
+    });
+    this.node.close();
   }
 }
